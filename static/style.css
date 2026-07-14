@@ -10,6 +10,8 @@
   --like-bg: #e5f3ea;
   --avoid: #b3403a;
   --avoid-bg: #f9e9e7;
+  --diet: #8a6116;
+  --diet-bg: #f7efdc;
   --neutral-bg: #eef0f3;
   --radius: 10px;
 }
@@ -26,6 +28,8 @@
     --like-bg: #24352b;
     --avoid: #e09891;
     --avoid-bg: #3b2725;
+    --diet: #d9b36a;
+    --diet-bg: #38301d;
     --neutral-bg: #2b3037;
   }
 }
@@ -108,6 +112,8 @@ button.icon {
 }
 .chip.like { background: var(--like-bg); color: var(--like); }
 .chip.avoid { background: var(--avoid-bg); color: var(--avoid); }
+.chip.diet { background: var(--diet-bg); color: var(--diet); }
+.chip .val { cursor: pointer; }
 .chip .note { opacity: .7; font-size: 12px; }
 .chip button { background: none; border: 0; color: inherit; opacity: .6;
   padding: 0 4px; min-height: 0; font-size: 15px; }
@@ -143,6 +149,7 @@ button.icon {
 }
 .polarity button.on.like { background: var(--like-bg); color: var(--like); }
 .polarity button.on.avoid { background: var(--avoid-bg); color: var(--avoid); }
+.polarity button.on.diet { background: var(--diet-bg); color: var(--diet); }
 .polarity button.on.neutral { background: var(--neutral-bg); color: var(--ink); }
 
 /* facts */
@@ -156,6 +163,7 @@ button.icon {
 .report-section { border-left: 4px solid var(--line); }
 .report-section.avoid { border-left-color: var(--avoid); }
 .report-section.serve { border-left-color: var(--like); }
+.report-section.diet { border-left-color: var(--diet); }
 .report-item { padding: 8px 0; border-bottom: 1px solid var(--line); }
 .report-item:last-child { border-bottom: 0; }
 .report-item .val { font-weight: 600; }

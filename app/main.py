@@ -2,25 +2,41 @@
 
 import os
 import sqlite3
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 
 from . import db as dbmod
 from .report import food_report
 
-app = FastAPI(title="People")
-
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 
-def get_db():
-    conn = dbmod.connect(os.environ.get("PEOPLE_DB", dbmod.DEFAULT_DB_PATH))
+def _db_path() -> str:
+    return os.environ.get("PEOPLE_DB", str(dbmod.DEFAULT_DB_PATH))
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    conn = dbmod.connect(_db_path())
     try:
         dbmod.init_db(conn)
+    finally:
+        conn.close()
+    yield
+
+
+app = FastAPI(title="People", lifespan=lifespan)
+
+
+def get_db():
+    conn = dbmod.connect(_db_path())
+    try:
         yield conn
     finally:
         conn.close()
@@ -28,23 +44,34 @@ def get_db():
 
 # ---------- payload models ----------
 
+# Strip before validation so whitespace-only input fails min_length.
+NonEmpty = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+Stripped = Annotated[str, StringConstraints(strip_whitespace=True)]
+
+POLARITIES = ("like", "avoid", "diet", "neutral")
+
+
 class EntityIn(BaseModel):
-    name: str = Field(min_length=1)
-    notes: str = ""
+    name: NonEmpty
+    notes: Stripped = ""
 
 
 class FactIn(BaseModel):
-    text: str = Field(min_length=1)
+    text: NonEmpty
 
 
 class AttributeAssignIn(BaseModel):
-    attribute: str = Field(min_length=1)   # attribute name, created if new
-    value: str = Field(min_length=1)       # value text, created if new
-    note: str = ""
+    attribute: NonEmpty  # attribute name, created if new
+    value: NonEmpty      # value text, created if new
+    note: Stripped = ""
+
+
+class NoteIn(BaseModel):
+    note: Stripped
 
 
 class PolarityIn(BaseModel):
-    polarity: str = Field(pattern="^(like|avoid|neutral)$")
+    polarity: Literal[*POLARITIES]
 
 
 class ReportIn(BaseModel):
@@ -54,11 +81,26 @@ class ReportIn(BaseModel):
 
 # ---------- helpers ----------
 
+# 'persons'/'families' as used in URLs -> (entity_type stored in DB, table)
+ENTITY_KINDS = {"persons": ("person", "persons"), "families": ("family", "families")}
+
+Kind = Literal["persons", "families"]
+
+
+def _like(q: str) -> str:
+    """Escape LIKE metacharacters; queries must add ESCAPE '\\'."""
+    return q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _one(conn, query, args) -> sqlite3.Row:
     row = conn.execute(query, args).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
     return row
+
+
+def _exists(conn, kind: Kind, entity_id: int) -> None:
+    _one(conn, f"SELECT id FROM {ENTITY_KINDS[kind][1]} WHERE id = ?", (entity_id,))
 
 
 def _entity_detail(conn, entity_type: str, entity_id: int) -> dict:
@@ -89,35 +131,72 @@ def _entity_detail(conn, entity_type: str, entity_id: int) -> dict:
     return {"attributes": attrs, "facts": facts}
 
 
-def _assign_attribute(conn, entity_type: str, entity_id: int, body: AttributeAssignIn):
-    attribute = body.attribute.strip()
-    value = body.value.strip()
-    if not attribute or not value:
-        raise HTTPException(status_code=422, detail="empty attribute or value")
+def _create_entity(conn, kind: Kind, body: EntityIn) -> dict:
+    cur = conn.execute(
+        f"INSERT INTO {ENTITY_KINDS[kind][1]} (name, notes) VALUES (?, ?)",
+        (body.name, body.notes),
+    )
+    conn.commit()
+    return {"id": cur.lastrowid}
+
+
+def _update_entity(conn, kind: Kind, entity_id: int, body: EntityIn) -> dict:
+    _exists(conn, kind, entity_id)
     conn.execute(
-        "INSERT INTO attributes (name) VALUES (?) ON CONFLICT (name) DO NOTHING",
-        (attribute,),
+        f"UPDATE {ENTITY_KINDS[kind][1]} SET name = ?, notes = ? WHERE id = ?",
+        (body.name, body.notes, entity_id),
+    )
+    conn.commit()
+    return {"ok": True}
+
+
+def _delete_entity(conn, kind: Kind, entity_id: int) -> dict:
+    # entity_attributes/facts cleanup happens in schema triggers,
+    # family_members via FK cascade.
+    _exists(conn, kind, entity_id)
+    conn.execute(f"DELETE FROM {ENTITY_KINDS[kind][1]} WHERE id = ?", (entity_id,))
+    conn.commit()
+    return {"ok": True}
+
+
+def _assign_attribute(conn, kind: Kind, entity_id: int, body: AttributeAssignIn) -> dict:
+    _exists(conn, kind, entity_id)
+    entity_type = ENTITY_KINDS[kind][0]
+    created = (
+        conn.execute(
+            "INSERT INTO attributes (name, polarity) VALUES (?, ?) "
+            "ON CONFLICT (name) DO NOTHING",
+            (body.attribute, dbmod.guess_polarity(body.attribute)),
+        ).rowcount
+        == 1
     )
     attr = conn.execute(
-        "SELECT id FROM attributes WHERE name = ?", (attribute,)
+        "SELECT id, polarity FROM attributes WHERE name = ?", (body.attribute,)
     ).fetchone()
     conn.execute(
         "INSERT INTO attribute_values (attribute_id, value) VALUES (?, ?) "
         "ON CONFLICT DO NOTHING",
-        (attr["id"], value),
+        (attr["id"], body.value),
     )
     val = conn.execute(
         "SELECT id FROM attribute_values WHERE attribute_id = ? AND value = ? COLLATE NOCASE",
-        (attr["id"], value),
+        (attr["id"], body.value),
     ).fetchone()
+    # Re-picking an already-assigned value must not wipe an existing note;
+    # notes are edited explicitly via PATCH /api/entity-attributes/{id}.
     conn.execute(
         "INSERT INTO entity_attributes (entity_type, entity_id, attribute_value_id, note) "
         "VALUES (?, ?, ?, ?) "
-        "ON CONFLICT (entity_type, entity_id, attribute_value_id) DO UPDATE SET note = excluded.note",
-        (entity_type, entity_id, val["id"], body.note.strip()),
+        "ON CONFLICT (entity_type, entity_id, attribute_value_id) DO UPDATE SET "
+        "note = CASE WHEN excluded.note != '' THEN excluded.note ELSE note END",
+        (entity_type, entity_id, val["id"], body.note),
     )
     conn.commit()
-    return {"ok": True}
+    return {
+        "ok": True,
+        "attribute_created": created,
+        "attribute_polarity": attr["polarity"],
+    }
 
 
 # ---------- persons ----------
@@ -125,28 +204,23 @@ def _assign_attribute(conn, entity_type: str, entity_id: int, body: AttributeAss
 @app.get("/api/persons")
 def list_persons(q: str = "", conn=Depends(get_db)):
     rows = conn.execute(
-        """
+        r"""
         SELECT p.id, p.name, p.notes,
                (SELECT group_concat(f.name, ', ') FROM family_members fm
                 JOIN families f ON f.id = fm.family_id
                 WHERE fm.person_id = p.id) AS families
         FROM persons p
-        WHERE p.name LIKE '%' || ? || '%'
+        WHERE p.name LIKE '%' || ? || '%' ESCAPE '\'
         ORDER BY p.name COLLATE NOCASE
         """,
-        (q,),
+        (_like(q),),
     )
     return [dict(r) for r in rows]
 
 
 @app.post("/api/persons", status_code=201)
 def create_person(body: EntityIn, conn=Depends(get_db)):
-    cur = conn.execute(
-        "INSERT INTO persons (name, notes) VALUES (?, ?)",
-        (body.name.strip(), body.notes.strip()),
-    )
-    conn.commit()
-    return {"id": cur.lastrowid}
+    return _create_entity(conn, "persons", body)
 
 
 @app.get("/api/persons/{person_id}")
@@ -167,28 +241,12 @@ def get_person(person_id: int, conn=Depends(get_db)):
 
 @app.put("/api/persons/{person_id}")
 def update_person(person_id: int, body: EntityIn, conn=Depends(get_db)):
-    _one(conn, "SELECT id FROM persons WHERE id = ?", (person_id,))
-    conn.execute(
-        "UPDATE persons SET name = ?, notes = ? WHERE id = ?",
-        (body.name.strip(), body.notes.strip(), person_id),
-    )
-    conn.commit()
-    return {"ok": True}
+    return _update_entity(conn, "persons", person_id, body)
 
 
 @app.delete("/api/persons/{person_id}")
 def delete_person(person_id: int, conn=Depends(get_db)):
-    _one(conn, "SELECT id FROM persons WHERE id = ?", (person_id,))
-    conn.execute(
-        "DELETE FROM entity_attributes WHERE entity_type = 'person' AND entity_id = ?",
-        (person_id,),
-    )
-    conn.execute(
-        "DELETE FROM facts WHERE entity_type = 'person' AND entity_id = ?", (person_id,)
-    )
-    conn.execute("DELETE FROM persons WHERE id = ?", (person_id,))
-    conn.commit()
-    return {"ok": True}
+    return _delete_entity(conn, "persons", person_id)
 
 
 # ---------- families ----------
@@ -196,27 +254,22 @@ def delete_person(person_id: int, conn=Depends(get_db)):
 @app.get("/api/families")
 def list_families(q: str = "", conn=Depends(get_db)):
     rows = conn.execute(
-        """
+        r"""
         SELECT f.id, f.name, f.notes,
                (SELECT count(*) FROM family_members fm WHERE fm.family_id = f.id)
                AS member_count
         FROM families f
-        WHERE f.name LIKE '%' || ? || '%'
+        WHERE f.name LIKE '%' || ? || '%' ESCAPE '\'
         ORDER BY f.name COLLATE NOCASE
         """,
-        (q,),
+        (_like(q),),
     )
     return [dict(r) for r in rows]
 
 
 @app.post("/api/families", status_code=201)
 def create_family(body: EntityIn, conn=Depends(get_db)):
-    cur = conn.execute(
-        "INSERT INTO families (name, notes) VALUES (?, ?)",
-        (body.name.strip(), body.notes.strip()),
-    )
-    conn.commit()
-    return {"id": cur.lastrowid}
+    return _create_entity(conn, "families", body)
 
 
 @app.get("/api/families/{family_id}")
@@ -240,34 +293,18 @@ def get_family(family_id: int, conn=Depends(get_db)):
 
 @app.put("/api/families/{family_id}")
 def update_family(family_id: int, body: EntityIn, conn=Depends(get_db)):
-    _one(conn, "SELECT id FROM families WHERE id = ?", (family_id,))
-    conn.execute(
-        "UPDATE families SET name = ?, notes = ? WHERE id = ?",
-        (body.name.strip(), body.notes.strip(), family_id),
-    )
-    conn.commit()
-    return {"ok": True}
+    return _update_entity(conn, "families", family_id, body)
 
 
 @app.delete("/api/families/{family_id}")
 def delete_family(family_id: int, conn=Depends(get_db)):
-    _one(conn, "SELECT id FROM families WHERE id = ?", (family_id,))
-    conn.execute(
-        "DELETE FROM entity_attributes WHERE entity_type = 'family' AND entity_id = ?",
-        (family_id,),
-    )
-    conn.execute(
-        "DELETE FROM facts WHERE entity_type = 'family' AND entity_id = ?", (family_id,)
-    )
-    conn.execute("DELETE FROM families WHERE id = ?", (family_id,))
-    conn.commit()
-    return {"ok": True}
+    return _delete_entity(conn, "families", family_id)
 
 
 @app.put("/api/families/{family_id}/members/{person_id}", status_code=201)
 def add_member(family_id: int, person_id: int, conn=Depends(get_db)):
-    _one(conn, "SELECT id FROM families WHERE id = ?", (family_id,))
-    _one(conn, "SELECT id FROM persons WHERE id = ?", (person_id,))
+    _exists(conn, "families", family_id)
+    _exists(conn, "persons", person_id)
     conn.execute(
         "INSERT INTO family_members (family_id, person_id) VALUES (?, ?) "
         "ON CONFLICT DO NOTHING",
@@ -289,16 +326,10 @@ def remove_member(family_id: int, person_id: int, conn=Depends(get_db)):
 
 # ---------- attributes on entities ----------
 
-@app.post("/api/persons/{person_id}/attributes", status_code=201)
-def assign_person_attribute(person_id: int, body: AttributeAssignIn, conn=Depends(get_db)):
-    _one(conn, "SELECT id FROM persons WHERE id = ?", (person_id,))
-    return _assign_attribute(conn, "person", person_id, body)
-
-
-@app.post("/api/families/{family_id}/attributes", status_code=201)
-def assign_family_attribute(family_id: int, body: AttributeAssignIn, conn=Depends(get_db)):
-    _one(conn, "SELECT id FROM families WHERE id = ?", (family_id,))
-    return _assign_attribute(conn, "family", family_id, body)
+@app.post("/api/{kind}/{entity_id}/attributes", status_code=201)
+def assign_attribute(kind: Kind, entity_id: int, body: AttributeAssignIn,
+                     conn=Depends(get_db)):
+    return _assign_attribute(conn, kind, entity_id, body)
 
 
 @app.delete("/api/entity-attributes/{ea_id}")
@@ -309,19 +340,23 @@ def unassign_attribute(ea_id: int, conn=Depends(get_db)):
     return {"ok": True}
 
 
+@app.patch("/api/entity-attributes/{ea_id}")
+def set_attribute_note(ea_id: int, body: NoteIn, conn=Depends(get_db)):
+    _one(conn, "SELECT id FROM entity_attributes WHERE id = ?", (ea_id,))
+    conn.execute("UPDATE entity_attributes SET note = ? WHERE id = ?",
+                 (body.note, ea_id))
+    conn.commit()
+    return {"ok": True}
+
+
 # ---------- facts ----------
 
-@app.post("/api/{entity_type}/{entity_id}/facts", status_code=201)
-def add_fact(entity_type: str, entity_id: int, body: FactIn, conn=Depends(get_db)):
-    table = {"persons": ("person", "persons"), "families": ("family", "families")}.get(
-        entity_type
-    )
-    if table is None:
-        raise HTTPException(status_code=404, detail="not found")
-    _one(conn, f"SELECT id FROM {table[1]} WHERE id = ?", (entity_id,))
+@app.post("/api/{kind}/{entity_id}/facts", status_code=201)
+def add_fact(kind: Kind, entity_id: int, body: FactIn, conn=Depends(get_db)):
+    _exists(conn, kind, entity_id)
     cur = conn.execute(
         "INSERT INTO facts (entity_type, entity_id, text) VALUES (?, ?, ?)",
-        (table[0], entity_id, body.text.strip()),
+        (ENTITY_KINDS[kind][0], entity_id, body.text),
     )
     conn.commit()
     return {"id": cur.lastrowid}
@@ -335,22 +370,22 @@ def delete_fact(fact_id: int, conn=Depends(get_db)):
     return {"ok": True}
 
 
-# ---------- autocomplete ----------
+# ---------- attribute vocabulary ----------
 
 @app.get("/api/attributes")
 def list_attributes(q: str = "", conn=Depends(get_db)):
     """Attribute names for autocomplete, most-used first."""
     rows = conn.execute(
-        """
+        r"""
         SELECT a.id, a.name, a.polarity,
                (SELECT count(*) FROM attribute_values av
                 JOIN entity_attributes ea ON ea.attribute_value_id = av.id
                 WHERE av.attribute_id = a.id) AS uses
         FROM attributes a
-        WHERE a.name LIKE '%' || ? || '%'
+        WHERE a.name LIKE '%' || ? || '%' ESCAPE '\'
         ORDER BY uses DESC, a.name COLLATE NOCASE
         """,
-        (q,),
+        (_like(q),),
     )
     return [dict(r) for r in rows]
 
@@ -366,23 +401,41 @@ def set_attribute_polarity(attribute_id: int, body: PolarityIn, conn=Depends(get
     return {"ok": True}
 
 
+@app.delete("/api/attributes/{attribute_id}")
+def delete_attribute(attribute_id: int, conn=Depends(get_db)):
+    """Remove an attribute name (typo cleanup); cascades values + assignments."""
+    _one(conn, "SELECT id FROM attributes WHERE id = ?", (attribute_id,))
+    conn.execute("DELETE FROM attributes WHERE id = ?", (attribute_id,))
+    conn.commit()
+    return {"ok": True}
+
+
 @app.get("/api/values")
 def list_values(attribute: str = "", q: str = "", conn=Depends(get_db)):
     """Value suggestions for autocomplete, scoped to an attribute name,
     most-used first — 'tomatoes' entered for X is offered when editing Y."""
     rows = conn.execute(
-        """
+        r"""
         SELECT av.id, av.value,
                (SELECT count(*) FROM entity_attributes ea
                 WHERE ea.attribute_value_id = av.id) AS uses
         FROM attribute_values av
         JOIN attributes a ON a.id = av.attribute_id
-        WHERE a.name = ? AND av.value LIKE '%' || ? || '%'
+        WHERE a.name = ? AND av.value LIKE '%' || ? || '%' ESCAPE '\'
         ORDER BY uses DESC, av.value COLLATE NOCASE
         """,
-        (attribute, q),
+        (attribute, _like(q)),
     )
     return [dict(r) for r in rows]
+
+
+@app.delete("/api/values/{value_id}")
+def delete_value(value_id: int, conn=Depends(get_db)):
+    """Remove a vocabulary value (typo cleanup); cascades assignments."""
+    _one(conn, "SELECT id FROM attribute_values WHERE id = ?", (value_id,))
+    conn.execute("DELETE FROM attribute_values WHERE id = ?", (value_id,))
+    conn.commit()
+    return {"ok": True}
 
 
 # ---------- report ----------

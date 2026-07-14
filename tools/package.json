@@ -1,0 +1,5 @@
+{
+  "name": "people-ui-check",
+  "private": true,
+  "dependencies": { "jsdom": "^24.0.0" }
+}

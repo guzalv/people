@@ -32,6 +32,17 @@ function el(html) {
   return t.content.firstElementChild;
 }
 
+// Resolve "create X" from a membership combobox: the suggestion list filters
+// out entities that are already members, so an exact name match may exist
+// even when the user was offered "Add" — reuse it instead of duplicating.
+async function resolveOrCreate(kind, item) {
+  if (!item.isNew) return item.id;
+  const all = await GET(`/api/${kind}?q=${encodeURIComponent(item.label)}`);
+  const hit = all.find((e) => e.name.toLowerCase() === item.label.toLowerCase());
+  if (hit) return hit.id;
+  return (await api("POST", `/api/${kind}`, { name: item.label })).id;
+}
+
 let toastTimer;
 function toast(msg) {
   let t = document.getElementById("toast");
@@ -43,7 +54,10 @@ function toast(msg) {
 }
 
 function fmtDate(s) {
-  return (s || "").slice(0, 10);
+  if (!s) return "";
+  // SQLite datetime('now') is UTC; render as the local date.
+  const d = new Date(s.replace(" ", "T") + "Z");
+  return isNaN(d) ? s.slice(0, 10) : d.toLocaleDateString();
 }
 
 function debounce(fn, ms) {
@@ -63,12 +77,17 @@ function combobox({ placeholder, suggest, onPick, keepValue = false, allowCreate
   </div>`);
   const input = root.querySelector("input");
   let list = null;
+  let lastItems = [];   // suggestions currently shown
+  let lastQuery = null; // the query they were fetched for
 
   const close = () => { if (list) { list.remove(); list = null; } };
 
   async function open() {
     const q = input.value.trim();
     const items = await suggest(q);
+    if (input.value.trim() !== q) return; // stale response, newer fetch coming
+    lastItems = items;
+    lastQuery = q;
     close();
     if (document.activeElement !== input) return; // blurred while fetching
     list = el(`<div class="combo-list"></div>`);
@@ -108,8 +127,12 @@ function combobox({ placeholder, suggest, onPick, keepValue = false, allowCreate
       e.preventDefault();
       const q = input.value.trim();
       if (!q) return;
-      const first = list && list.querySelector("button");
-      if (first) first.dispatchEvent(new Event("pointerdown"));
+      // Only trust an exact match, and only if the list is for this query —
+      // never blind-pick the top suggestion (it may be a stale or superstring
+      // match, e.g. "teabread" ranked above the typed "tea").
+      const exact = lastQuery === q &&
+        lastItems.find((it) => it.label.toLowerCase() === q.toLowerCase());
+      if (exact) pick({ ...exact, isNew: false });
       else if (allowCreate) pick({ label: q, isNew: true });
     }
     if (e.key === "Escape") close();
@@ -124,9 +147,14 @@ function combobox({ placeholder, suggest, onPick, keepValue = false, allowCreate
 
 const POLARITIES = [
   ["like", "serve"],
-  ["neutral", "–"],
   ["avoid", "avoid"],
+  ["diet", "diet"],
+  ["neutral", "–"],
 ];
+
+// Last attribute used in the add row, kept across the full re-render that
+// follows each mutation so adding several values in a row stays frictionless.
+let lastAttr = null;
 
 function attributesSection(entity, kind, reload) {
   // kind: "persons" | "families"
@@ -143,7 +171,7 @@ function attributesSection(entity, kind, reload) {
     const grp = el(`<div class="attr-group">
       <div class="attr-head">
         <span class="name">${esc(name)}</span>
-        <span class="polarity"></span>
+        <span class="polarity" title="how the meal report treats this attribute — applies to everyone using it"></span>
       </div>
       <div class="chips"></div>
     </div>`);
@@ -159,9 +187,15 @@ function attributesSection(entity, kind, reload) {
     const chips = grp.querySelector(".chips");
     for (const item of g.items) {
       const chip = el(`<span class="chip ${g.meta.polarity !== "neutral" ? g.meta.polarity : ""}">
-        ${esc(item.value)}${item.note ? ` <span class="note">(${esc(item.note)})</span>` : ""}
+        <span class="val" title="tap to edit note">${esc(item.value)}${item.note ? ` <span class="note">(${esc(item.note)})</span>` : ""}</span>
         <button type="button" title="remove">×</button>
       </span>`);
+      chip.querySelector(".val").addEventListener("click", async () => {
+        const note = prompt(`Note for “${item.value}”`, item.note);
+        if (note === null) return; // cancelled
+        await api("PATCH", `/api/entity-attributes/${item.id}`, { note: note.trim() });
+        reload();
+      });
       chip.querySelector("button").addEventListener("click", async () => {
         await api("DELETE", `/api/entity-attributes/${item.id}`);
         reload();
@@ -172,9 +206,9 @@ function attributesSection(entity, kind, reload) {
   }
   if (!groups.size) card.appendChild(el(`<div class="empty">Nothing yet</div>`));
 
-  // add row: attribute combobox -> value combobox (scoped) -> optional note
+  // add row: attribute combobox -> value combobox (scoped to the attribute)
   const addRow = el(`<div class="row mt"></div>`);
-  let chosenAttr = null;
+  let chosenAttr = lastAttr;
 
   const valueBox = combobox({
     placeholder: "value…",
@@ -184,9 +218,14 @@ function attributesSection(entity, kind, reload) {
       : Promise.resolve([]),
     onPick: async (item) => {
       if (!chosenAttr) { toast("Pick an attribute first"); return; }
-      const note = noteInput.value.trim();
-      await api("POST", `/api/${kind}/${entity.id}/attributes`,
-        { attribute: chosenAttr, value: item.label, note });
+      const res = await api("POST", `/api/${kind}/${entity.id}/attributes`,
+        { attribute: chosenAttr, value: item.label });
+      lastAttr = chosenAttr;
+      if (res.attribute_created) {
+        toast(`New attribute “${chosenAttr}” → ${res.attribute_polarity === "neutral"
+          ? "not in meal reports (set serve/avoid/diet below to include it)"
+          : res.attribute_polarity + " in meal reports"}`);
+      }
       reload();
     },
   });
@@ -199,12 +238,10 @@ function attributesSection(entity, kind, reload) {
     onPick: (item) => { chosenAttr = item.label; valueBox.focus(); },
   });
   attrBox.input.addEventListener("input", () => { chosenAttr = attrBox.input.value.trim() || null; });
-
-  const noteInput = el(`<input type="text" placeholder="note (optional)">`);
+  if (lastAttr) attrBox.input.value = lastAttr;
 
   addRow.appendChild(el(`<div class="grow"></div>`)).appendChild(attrBox);
   addRow.appendChild(el(`<div class="grow"></div>`)).appendChild(valueBox);
-  addRow.appendChild(el(`<div class="grow"></div>`)).appendChild(noteInput);
   card.appendChild(addRow);
   return root;
 }
@@ -360,8 +397,7 @@ async function personView(id) {
       return fams.filter((f) => !mine.has(f.id)).map((f) => ({ id: f.id, label: f.name }));
     },
     onPick: async (item) => {
-      let fid = item.id;
-      if (item.isNew) fid = (await api("POST", "/api/families", { name: item.label })).id;
+      const fid = await resolveOrCreate("families", item);
       await api("PUT", `/api/families/${fid}/members/${p.id}`);
       reload();
     },
@@ -419,8 +455,7 @@ async function familyView(id) {
       return ps.filter((x) => !mine.has(x.id)).map((x) => ({ id: x.id, label: x.name }));
     },
     onPick: async (item) => {
-      let pid = item.id;
-      if (item.isNew) pid = (await api("POST", "/api/persons", { name: item.label })).id;
+      const pid = await resolveOrCreate("persons", item);
       await api("PUT", `/api/families/${f.id}/members/${pid}`);
       reload();
     },
@@ -473,11 +508,14 @@ async function planView(params) {
   if (!persons.length) pplBox.appendChild(el(`<div class="empty">No people</div>`));
 
   const out = root.querySelector("[data-report]");
+  let seq = 0; // drop out-of-order report responses
   async function refresh() {
+    const my = ++seq;
     const person_ids = [...root.querySelectorAll("[data-person]:checked")].map((c) => +c.dataset.person);
     const family_ids = [...root.querySelectorAll("[data-family]:checked")].map((c) => +c.dataset.family);
     if (!person_ids.length && !family_ids.length) { out.replaceChildren(); return; }
     const rep = await api("POST", "/api/report/food", { person_ids, family_ids });
+    if (my !== seq) return; // a newer selection superseded this request
     const who = (list) => list.map((w) =>
       `${esc(w.person)} <span class="muted">(${esc(w.reason)}${w.via_family ? `, via ${esc(w.via_family)}` : ""})</span>`).join(", ");
     out.replaceChildren(el(`<div>
@@ -490,6 +528,13 @@ async function planView(params) {
             ${e.conflicts.length ? `<div class="conflict">⚠ but liked by ${e.conflicts.map((c) => esc(c.person)).join(", ")}</div>` : ""}
           </div>`).join("") || `<div class="empty">Nothing to avoid</div>`}
       </div>
+      ${rep.diets.length ? `<div class="card report-section diet">
+        <h3>🥗 Diets to accommodate</h3>
+        ${rep.diets.map((e) => `<div class="report-item">
+            <div class="val">${esc(e.value)}</div>
+            <div class="why">${who(e.who)}</div>
+          </div>`).join("")}
+      </div>` : ""}
       <div class="card report-section serve">
         <h3>✓ Good choices</h3>
         ${rep.serve.map((e) => `<div class="report-item">
