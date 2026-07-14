@@ -67,7 +67,8 @@ def _entity_detail(conn, entity_type: str, entity_id: int) -> dict:
         dict(r)
         for r in conn.execute(
             """
-            SELECT ea.id, a.name AS attribute, a.polarity, av.value, ea.note
+            SELECT ea.id, a.id AS attribute_id, a.name AS attribute, a.polarity,
+                   av.value, ea.note
             FROM entity_attributes ea
             JOIN attribute_values av ON av.id = ea.attribute_value_id
             JOIN attributes a ON a.id = av.attribute_id
