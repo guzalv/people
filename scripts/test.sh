@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # test.sh — backend unit tests (pytest), plus the jsdom UI smoke test when node
-# and tools/node_modules are present. The UI test runs a scratch-DB server on a
-# free port and never touches port 8080.
+# and tools/node_modules are present, plus a real-Chrome smoke test when a CDP
+# endpoint is reachable (start Chrome outside any sandbox with
+# --remote-debugging-port=9222). UI tests run a scratch-DB server on a free
+# port and never touch port 8080.
 #
 # USAGE: scripts/test.sh
 set -euo pipefail
@@ -33,6 +35,25 @@ if command -v node >/dev/null 2>&1 && [ -d tools/node_modules ]; then
   done
 
   ( cd tools && BASE="http://127.0.0.1:$PORT" APP_JS=../static/app.js node ui-check.js )
+
+  CDP_URL="${CDP_URL:-http://127.0.0.1:9222}"
+  if curl -sf -m 2 "$CDP_URL/json/version" >/dev/null 2>&1; then
+    echo "== browser smoke test (real Chrome via CDP) =="
+    # Fresh DB for the browser flow: restart the scratch server (schema is
+    # created at startup).
+    kill "$SRV" 2>/dev/null || true
+    rm -f "$DB" "$DB-wal" "$DB-shm"
+    PEOPLE_DB="$DB" .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port "$PORT" \
+      >>/private/tmp/people-uitest-$$.log 2>&1 &
+    SRV=$!
+    for _ in $(seq 1 50); do
+      curl -sf "http://127.0.0.1:$PORT/" >/dev/null 2>&1 && break
+      sleep 0.1
+    done
+    BASE="http://127.0.0.1:$PORT" CDP_URL="$CDP_URL" "$PY" tools/browser-check.py
+  else
+    echo "== browser smoke test skipped (no CDP endpoint at $CDP_URL) =="
+  fi
 else
   echo "== UI smoke test skipped (node or tools/node_modules missing; run 'cd tools && npm install') =="
 fi
