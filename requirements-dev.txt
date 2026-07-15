@@ -1,0 +1,5 @@
+# Test-only deps (backend unit tests). Install on top of requirements.txt.
+# The UI smoke test (tools/ui-check.js) runs on node/jsdom, not here.
+-r requirements.txt
+pytest==9.1.1
+httpx==0.28.1

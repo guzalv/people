@@ -5,7 +5,7 @@
 const { JSDOM } = require("jsdom");
 const fs = require("fs");
 
-const BASE = "http://127.0.0.1:8766";
+const BASE = process.env.BASE || "http://127.0.0.1:8766";
 const errors = [];
 
 async function main() {

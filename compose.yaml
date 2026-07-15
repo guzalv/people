@@ -1,0 +1,10 @@
+services:
+  people:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      # Keep the SQLite file as a plain file in ./data on the host so it's easy
+      # to back up (scripts/backup.sh) — the container writes /data/people.db.
+      - ./data:/data
+    restart: unless-stopped

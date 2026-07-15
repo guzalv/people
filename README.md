@@ -6,12 +6,29 @@ on in their lives. Single-user, local, no auth.
 ## Run
 
 ```bash
-.venv/bin/uvicorn app.main:app --port 8000
-# open http://localhost:8000  (works from a phone on the same network with --host 0.0.0.0)
+scripts/run.sh            # dev server on http://127.0.0.1:8000 (creates .venv on first run)
+scripts/serve-lan.sh      # same, on 0.0.0.0:8080, prints the LAN URL for phone access
 ```
 
-Data lives in `data/people.db` (SQLite). Back up by copying the file or
+Or drive uvicorn directly: `.venv/bin/uvicorn app.main:app --port 8000`.
+
+Data lives in `data/people.db` (SQLite). Back up with `scripts/backup.sh`
+(sqlite3 `.backup` under the hood), by copying the file, or
 `curl localhost:8000/api/export > backup.json`.
+
+## Docker
+
+For a deployment that doesn't need the `.venv` around — and that serves the LAN
+(so a phone can reach it) from a normal terminal:
+
+```bash
+docker compose up -d --build
+# open http://localhost:8080  (and http://<this-machine-ip>:8080 from a phone)
+```
+
+The SQLite file stays a plain file on the host at `./data/people.db` (compose
+bind-mounts `./data` to `/data` in the container), so `scripts/backup.sh` and
+plain copies still work. `restart: unless-stopped` keeps it up across reboots.
 
 ## Concepts
 
@@ -51,11 +68,20 @@ curl -X DELETE localhost:8000/api/attributes/<id>  # same for an attribute name
 ## Development
 
 ```bash
+scripts/test.sh          # backend unit tests, plus the UI smoke test if tools/node_modules exists
+```
+
+`scripts/test.sh` runs pytest and, when `tools/node_modules` is present, starts
+a scratch-DB server on a free port and runs the jsdom UI smoke test against it.
+To run the pieces by hand:
+
+```bash
 .venv/bin/python -m pytest tests/ -q     # backend unit tests
 
 # UI smoke test (jsdom drives the real SPA against a live server):
 .venv/bin/uvicorn app.main:app --port 8766 &   # with a scratch PEOPLE_DB
 cd tools && npm install && APP_JS=../static/app.js node ui-check.js
+# ui-check.js targets $BASE (default http://127.0.0.1:8766)
 ```
 
 - `app/db.py` — schema + connection (SQLite, WAL, FKs, cleanup triggers)

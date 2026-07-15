@@ -1,0 +1,10 @@
+.venv/
+data/
+backups/
+tools/node_modules/
+.git/
+.gitignore
+**/__pycache__/
+*.pyc
+.pytest_cache/
+tests/
