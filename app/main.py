@@ -48,8 +48,6 @@ def get_db():
 NonEmpty = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 Stripped = Annotated[str, StringConstraints(strip_whitespace=True)]
 
-POLARITIES = ("like", "avoid", "diet", "neutral")
-
 
 class EntityIn(BaseModel):
     name: NonEmpty
@@ -68,10 +66,6 @@ class AttributeAssignIn(BaseModel):
 
 class NoteIn(BaseModel):
     note: Stripped
-
-
-class PolarityIn(BaseModel):
-    polarity: Literal[*POLARITIES]
 
 
 class ReportIn(BaseModel):
@@ -164,9 +158,8 @@ def _assign_attribute(conn, kind: Kind, entity_id: int, body: AttributeAssignIn)
     entity_type = ENTITY_KINDS[kind][0]
     created = (
         conn.execute(
-            "INSERT INTO attributes (name, polarity) VALUES (?, ?) "
-            "ON CONFLICT (name) DO NOTHING",
-            (body.attribute, dbmod.guess_polarity(body.attribute)),
+            "INSERT INTO attributes (name) VALUES (?) ON CONFLICT (name) DO NOTHING",
+            (body.attribute,),
         ).rowcount
         == 1
     )
@@ -390,21 +383,12 @@ def list_attributes(q: str = "", conn=Depends(get_db)):
     return [dict(r) for r in rows]
 
 
-@app.patch("/api/attributes/{attribute_id}")
-def set_attribute_polarity(attribute_id: int, body: PolarityIn, conn=Depends(get_db)):
-    _one(conn, "SELECT id FROM attributes WHERE id = ?", (attribute_id,))
-    conn.execute(
-        "UPDATE attributes SET polarity = ? WHERE id = ?",
-        (body.polarity, attribute_id),
-    )
-    conn.commit()
-    return {"ok": True}
-
-
 @app.delete("/api/attributes/{attribute_id}")
 def delete_attribute(attribute_id: int, conn=Depends(get_db)):
     """Remove an attribute name (typo cleanup); cascades values + assignments."""
-    _one(conn, "SELECT id FROM attributes WHERE id = ?", (attribute_id,))
+    row = _one(conn, "SELECT id, name FROM attributes WHERE id = ?", (attribute_id,))
+    if row["name"].lower() in dbmod.FOOD_ATTRIBUTE_NAMES:
+        raise HTTPException(status_code=400, detail="food attributes are fixed")
     conn.execute("DELETE FROM attributes WHERE id = ?", (attribute_id,))
     conn.commit()
     return {"ok": True}

@@ -99,13 +99,13 @@ def test_neutral_attributes_ignored(client, make_person, give):
     assert rep["serve"] == [] and rep["avoid"] == [] and rep["diets"] == []
 
 
-def test_guessed_avoid_polarity_reaches_report(client, make_person, give):
-    """A brand-new attribute named like an allergy must not vanish from the
-    report just because it isn't one of the seeded names."""
+def test_free_form_attributes_never_reach_report(client, make_person, give):
+    """Only the fixed food attributes feed the report; a free-form attribute
+    stays out of it even with a food-sounding name."""
     a = make_person("A")
-    give(a, "allergies", "shellfish")  # plural — not the seeded "allergy"
+    give(a, "allergies", "shellfish")  # not the fixed "allergy" attribute
     rep = report(client, [a])
-    assert [e["value"] for e in rep["avoid"]] == ["shellfish"]
+    assert rep["avoid"] == [] and rep["serve"] == [] and rep["diets"] == []
 
 
 def test_duplicate_via_family_and_direct_deduped(client, make_person, make_family, give):

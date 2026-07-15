@@ -136,22 +136,22 @@ button.icon {
 .combo-list button.create { color: var(--accent); font-weight: 600; }
 .combo-list button .hint { color: var(--muted); font-size: 13px; float: right; }
 
+h2 .hint { text-transform: none; letter-spacing: 0; font-weight: 400; }
+
+/* food section: one row per fixed attribute */
+.food-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 0; border-bottom: 1px solid var(--line);
+}
+.food-row:last-child { border-bottom: 0; }
+.food-row .label { font-weight: 600; font-size: 14px; flex: 0 0 76px; }
+.food-row .chips { flex: 1 1 auto; }
+.food-row .add { flex: 1 1 110px; min-width: 110px; }
+
 /* attribute groups */
 .attr-group { margin-bottom: 12px; }
 .attr-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .attr-head .name { font-weight: 600; font-size: 14px; }
-.polarity {
-  display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden;
-}
-.polarity button {
-  background: none; color: var(--muted); min-height: 0;
-  padding: 3px 9px; font-size: 12px; border-radius: 0;
-}
-.polarity button.on.like { background: var(--like-bg); color: var(--like); }
-.polarity button.on.avoid { background: var(--avoid-bg); color: var(--avoid); }
-.polarity button.on.diet { background: var(--diet-bg); color: var(--diet); }
-.polarity button.on.neutral { background: var(--neutral-bg); color: var(--ink); }
-
 /* facts */
 .fact { display: flex; gap: 8px; align-items: baseline; padding: 7px 0;
         border-bottom: 1px solid var(--line); }

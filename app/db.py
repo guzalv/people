@@ -87,7 +87,9 @@ BEGIN
 END;
 """
 
-# Food-related attributes seeded so the meal report works out of the box.
+# The food attributes are a fixed, hardcoded set: always shown in the UI's
+# Food section, and the only attributes the meal report reads. Everything the
+# user types as a free-form attribute is neutral and never affects reports.
 SEED_ATTRIBUTES = [
     ("likes", "like"),
     ("dislikes", "avoid"),
@@ -95,22 +97,7 @@ SEED_ATTRIBUTES = [
     ("diet", "diet"),
 ]
 
-# A brand-new attribute whose name signals food sentiment should not silently
-# default to neutral (it would be invisible to the meal report).
-POLARITY_HINTS = [
-    ("allerg", "avoid"), ("intoleran", "avoid"), ("dislike", "avoid"),
-    ("avoid", "avoid"), ("hate", "avoid"),
-    ("diet", "diet"),
-    ("like", "like"), ("love", "like"), ("favorite", "like"), ("favourite", "like"),
-]
-
-
-def guess_polarity(attribute_name: str) -> str:
-    name = attribute_name.lower()
-    for needle, polarity in POLARITY_HINTS:
-        if needle in name:
-            return polarity
-    return "neutral"
+FOOD_ATTRIBUTE_NAMES = frozenset(name for name, _ in SEED_ATTRIBUTES)
 
 
 def connect(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:

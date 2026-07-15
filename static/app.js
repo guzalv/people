@@ -145,63 +145,93 @@ function combobox({ placeholder, suggest, onPick, keepValue = false, allowCreate
 
 /* ---------- attribute + facts sections (shared by person & family) ---------- */
 
-const POLARITIES = [
-  ["like", "serve"],
-  ["avoid", "avoid"],
-  ["diet", "diet"],
-  ["neutral", "–"],
+// The food attributes are fixed: always visible in their own section, and the
+// only ones the meal plan reads. Free-form attributes never affect reports.
+const FOOD_ATTRS = [
+  { name: "likes",    label: "Likes",     cls: "like"  },
+  { name: "dislikes", label: "Dislikes",  cls: "avoid" },
+  { name: "allergy",  label: "Allergies", cls: "avoid" },
+  { name: "diet",     label: "Diet",      cls: "diet"  },
 ];
+const FOOD_NAMES = new Set(FOOD_ATTRS.map((f) => f.name));
 
 // Last attribute used in the add row, kept across the full re-render that
 // follows each mutation so adding several values in a row stays frictionless.
 let lastAttr = null;
 
+function attributeChip(item, cls, reload) {
+  const chip = el(`<span class="chip ${cls}">
+    <span class="val" title="tap to edit note">${esc(item.value)}${item.note ? ` <span class="note">(${esc(item.note)})</span>` : ""}</span>
+    <button type="button" title="remove">×</button>
+  </span>`);
+  chip.querySelector(".val").addEventListener("click", async () => {
+    const note = prompt(`Note for “${item.value}”`, item.note);
+    if (note === null) return; // cancelled
+    await api("PATCH", `/api/entity-attributes/${item.id}`, { note: note.trim() });
+    reload();
+  });
+  chip.querySelector("button").addEventListener("click", async () => {
+    await api("DELETE", `/api/entity-attributes/${item.id}`);
+    reload();
+  });
+  return chip;
+}
+
+function valueCombobox(attrName, entity, kind, reload, placeholder = "add…") {
+  return combobox({
+    placeholder,
+    suggest: (q) =>
+      GET(`/api/values?attribute=${encodeURIComponent(attrName)}&q=${encodeURIComponent(q)}`)
+        .then((vs) => vs.map((v) => ({ label: v.value, hint: `×${v.uses}` }))),
+    onPick: async (item) => {
+      await api("POST", `/api/${kind}/${entity.id}/attributes`,
+        { attribute: attrName, value: item.label });
+      reload();
+    },
+  });
+}
+
+function foodSection(entity, kind, reload) {
+  const root = el(`<section>
+    <h2>Food <span class="hint">— feeds the meal plan</span></h2>
+    <div class="card"></div>
+  </section>`);
+  const card = root.querySelector(".card");
+  for (const f of FOOD_ATTRS) {
+    const row = el(`<div class="food-row">
+      <span class="label">${esc(f.label)}</span>
+      <span class="chips"></span>
+      <span class="add"></span>
+    </div>`);
+    const chips = row.querySelector(".chips");
+    for (const item of entity.attributes.filter((a) => a.attribute === f.name)) {
+      chips.appendChild(attributeChip(item, f.cls, reload));
+    }
+    row.querySelector(".add").appendChild(valueCombobox(f.name, entity, kind, reload));
+    card.appendChild(row);
+  }
+  return root;
+}
+
 function attributesSection(entity, kind, reload) {
-  // kind: "persons" | "families"
-  const root = el(`<section><h2>Attributes</h2><div class="card"></div></section>`);
+  // kind: "persons" | "families" — free-form attributes only (food is above)
+  const root = el(`<section><h2>Other attributes</h2><div class="card"></div></section>`);
   const card = root.querySelector(".card");
 
   // existing values grouped by attribute
   const groups = new Map();
   for (const a of entity.attributes) {
-    if (!groups.has(a.attribute)) groups.set(a.attribute, { meta: a, items: [] });
-    groups.get(a.attribute).items.push(a);
+    if (FOOD_NAMES.has(a.attribute.toLowerCase())) continue;
+    if (!groups.has(a.attribute)) groups.set(a.attribute, []);
+    groups.get(a.attribute).push(a);
   }
-  for (const [name, g] of groups) {
+  for (const [name, items] of groups) {
     const grp = el(`<div class="attr-group">
-      <div class="attr-head">
-        <span class="name">${esc(name)}</span>
-        <span class="polarity" title="how the meal report treats this attribute — applies to everyone using it"></span>
-      </div>
+      <div class="attr-head"><span class="name">${esc(name)}</span></div>
       <div class="chips"></div>
     </div>`);
-    const pol = grp.querySelector(".polarity");
-    for (const [value, label] of POLARITIES) {
-      const b = el(`<button type="button" class="${value} ${g.meta.polarity === value ? "on" : ""}">${label}</button>`);
-      b.addEventListener("click", async () => {
-        await api("PATCH", `/api/attributes/${g.meta.attribute_id}`, { polarity: value });
-        reload();
-      });
-      pol.appendChild(b);
-    }
     const chips = grp.querySelector(".chips");
-    for (const item of g.items) {
-      const chip = el(`<span class="chip ${g.meta.polarity !== "neutral" ? g.meta.polarity : ""}">
-        <span class="val" title="tap to edit note">${esc(item.value)}${item.note ? ` <span class="note">(${esc(item.note)})</span>` : ""}</span>
-        <button type="button" title="remove">×</button>
-      </span>`);
-      chip.querySelector(".val").addEventListener("click", async () => {
-        const note = prompt(`Note for “${item.value}”`, item.note);
-        if (note === null) return; // cancelled
-        await api("PATCH", `/api/entity-attributes/${item.id}`, { note: note.trim() });
-        reload();
-      });
-      chip.querySelector("button").addEventListener("click", async () => {
-        await api("DELETE", `/api/entity-attributes/${item.id}`);
-        reload();
-      });
-      chips.appendChild(chip);
-    }
+    for (const item of items) chips.appendChild(attributeChip(item, "", reload));
     card.appendChild(grp);
   }
   if (!groups.size) card.appendChild(el(`<div class="empty">Nothing yet</div>`));
@@ -218,23 +248,20 @@ function attributesSection(entity, kind, reload) {
       : Promise.resolve([]),
     onPick: async (item) => {
       if (!chosenAttr) { toast("Pick an attribute first"); return; }
-      const res = await api("POST", `/api/${kind}/${entity.id}/attributes`,
+      await api("POST", `/api/${kind}/${entity.id}/attributes`,
         { attribute: chosenAttr, value: item.label });
       lastAttr = chosenAttr;
-      if (res.attribute_created) {
-        toast(`New attribute “${chosenAttr}” → ${res.attribute_polarity === "neutral"
-          ? "not in meal reports (set serve/avoid/diet below to include it)"
-          : res.attribute_polarity + " in meal reports"}`);
-      }
       reload();
     },
   });
 
   const attrBox = combobox({
-    placeholder: "attribute (likes, allergy…)",
+    placeholder: "attribute (hobby, birthday…)",
     keepValue: true,
     suggest: (q) => GET(`/api/attributes?q=${encodeURIComponent(q)}`)
-      .then((as) => as.map((a) => ({ label: a.name, hint: a.polarity === "neutral" ? "" : a.polarity }))),
+      .then((as) => as
+        .filter((a) => !FOOD_NAMES.has(a.name.toLowerCase()))
+        .map((a) => ({ label: a.name }))),
     onPick: (item) => { chosenAttr = item.label; valueBox.focus(); },
   });
   attrBox.input.addEventListener("input", () => { chosenAttr = attrBox.input.value.trim() || null; });
@@ -404,6 +431,7 @@ async function personView(id) {
   }));
   root.appendChild(famSec);
 
+  root.appendChild(foodSection(p, "persons", reload));
   root.appendChild(attributesSection(p, "persons", reload));
   root.appendChild(factsSection(p, "persons", reload));
   return root;
@@ -462,6 +490,7 @@ async function familyView(id) {
   }));
   root.appendChild(memSec);
 
+  root.appendChild(foodSection(f, "families", reload));
   root.appendChild(attributesSection(f, "families", reload));
   root.appendChild(factsSection(f, "families", reload));
 

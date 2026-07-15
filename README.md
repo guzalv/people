@@ -17,17 +17,16 @@ Data lives in `data/people.db` (SQLite). Back up by copying the file or
 
 - **People** and **families**: a family groups people (many-to-many); families
   can be empty; a person can be in several families.
-- **Attributes**: free-form `name: value` pairs on people or families
-  (e.g. `likes: tomatoes`, `allergy: peanuts`, `hobby: chess`). Both names and
-  values autocomplete from everything entered before; typing something new
-  creates it. Values match case-insensitively ("Tomatoes" reuses "tomatoes").
-- **Polarity** on attribute names drives the meal report: `serve` (likes),
-  `avoid` (allergy, dislikes), `diet` (restrictions like "vegetarian" — shown
-  as their own report section, not as foods to avoid), or neutral (ignored by
-  the report — keep non-food attributes like `hobby` neutral). Seeded: likes,
-  dislikes, allergy, diet. New attribute names get a polarity guessed from
-  the name ("allergies" → avoid) and show a toast saying so; the toggle on
-  any detail page changes it — globally, for everyone using that attribute.
+- **Food** is a fixed, always-visible section on every person/family page
+  with four hardcoded attributes — Likes, Dislikes, Allergies, Diet — and it
+  is exactly what the meal report reads. Values autocomplete from everything
+  entered before (case-insensitively: "Tomatoes" reuses "tomatoes"); typing
+  something new creates it. Diet values ("vegetarian", "no pork") appear in
+  the report as restrictions to accommodate, not as foods to avoid. The food
+  attributes cannot be deleted.
+- **Other attributes**: free-form `name: value` pairs (e.g. `hobby: chess`,
+  `birthday: May 12`). Names and values autocomplete-with-create the same
+  way. These never affect the meal report.
 - **Notes** on an assignment ("only raw, roasted is fine"): tap a chip's text
   to add/edit. Re-picking a value from autocomplete never erases a note.
 - **Facts**: dated free-text notes on a person or family.

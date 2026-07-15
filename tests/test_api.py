@@ -117,27 +117,11 @@ def test_seeded_attributes_present(client):
     assert names["diet"] == "diet"
 
 
-@pytest.mark.parametrize("name,expected", [
-    ("allergies", "avoid"),      # plural of the seeded name
-    ("intolerances", "avoid"),
-    ("hates", "avoid"),
-    ("food loves", "like"),
-    ("dietary restriction", "diet"),
-    ("hobby", "neutral"),
-])
-def test_new_attribute_polarity_guessed_from_name(client, make_person, give, name, expected):
+def test_new_attributes_are_always_neutral(client, make_person, give):
+    """Food attributes are a fixed set; free-form ones never join the report."""
     pid = make_person("Alice")
-    res = give(pid, name, "something")
-    assert res["attribute_polarity"] == expected
-
-
-def test_attribute_polarity_can_change(client, make_person, give):
-    pid = make_person("Alice")
-    give(pid, "craves", "chocolate")
-    attr = next(a for a in client.get("/api/attributes").json() if a["name"] == "craves")
-    assert attr["polarity"] == "neutral"
-    r = client.patch(f"/api/attributes/{attr['id']}", json={"polarity": "like"})
-    assert r.status_code == 200
+    res = give(pid, "allergies", "shellfish")  # even a food-sounding name
+    assert res["attribute_polarity"] == "neutral"
 
 
 def test_unassign_attribute_keeps_vocabulary(client, make_person, give):
@@ -163,11 +147,17 @@ def test_delete_value_removes_suggestion_and_assignments(client, make_person, gi
 
 def test_delete_attribute_cascades(client, make_person, give):
     pid = make_person("Alice")
-    give(pid, "alergy", "nuts")  # typo attribute
+    give(pid, "hobbby", "chess")  # typo attribute
     aid = next(a["id"] for a in client.get("/api/attributes").json()
-               if a["name"] == "alergy")
+               if a["name"] == "hobbby")
     assert client.delete(f"/api/attributes/{aid}").status_code == 200
     assert client.get(f"/api/persons/{pid}").json()["attributes"] == []
+
+
+def test_food_attributes_cannot_be_deleted(client):
+    aid = next(a["id"] for a in client.get("/api/attributes").json()
+               if a["name"] == "likes")
+    assert client.delete(f"/api/attributes/{aid}").status_code == 400
 
 
 def test_family_attributes(client, make_family):
