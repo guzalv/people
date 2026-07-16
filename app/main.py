@@ -1,13 +1,23 @@
-"""FastAPI app: JSON API under /api, static SPA at /."""
+"""FastAPI app: JSON API under /api, static SPA at /.
 
+Auth: HTTP Basic over everything (the app holds PII and may face the public
+internet). PEOPLE_PASSWORD must be set or every request gets 503; the username
+is ignored. PEOPLE_AUTH_DISABLED=1 opts out for local dev and tests. Basic
+auth is only safe over HTTPS — see README before exposing.
+"""
+
+import asyncio
+import base64
+import binascii
 import os
+import secrets
 import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, StringConstraints
 
@@ -32,6 +42,35 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="People", lifespan=lifespan)
+
+@app.middleware("http")
+async def require_auth(request, call_next):
+    # Env read per request so tests can toggle it; negligible cost.
+    if os.environ.get("PEOPLE_AUTH_DISABLED") == "1":
+        return await call_next(request)
+    password = os.environ.get("PEOPLE_PASSWORD", "")
+    if not password:
+        # Fail closed: never serve PII because configuration was forgotten.
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "PEOPLE_PASSWORD is not set (or set PEOPLE_AUTH_DISABLED=1 for local dev)"},
+        )
+    header = request.headers.get("authorization", "")
+    scheme, _, blob = header.partition(" ")
+    supplied = ""
+    if scheme.lower() == "basic":
+        try:
+            supplied = base64.b64decode(blob).decode().partition(":")[2]
+        except (binascii.Error, UnicodeDecodeError):
+            pass
+    if not secrets.compare_digest(supplied.encode(), password.encode()):
+        await asyncio.sleep(0.3)  # slow down brute force a little
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "authentication required"},
+            headers={"WWW-Authenticate": 'Basic realm="People"'},
+        )
+    return await call_next(request)
 
 
 def get_db():

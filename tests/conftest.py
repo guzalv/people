@@ -4,10 +4,16 @@ from fastapi.testclient import TestClient
 from app.main import app
 
 
+TEST_PASSWORD = "test-password"
+
+
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("PEOPLE_DB", str(tmp_path / "test.db"))
+    monkeypatch.setenv("PEOPLE_PASSWORD", TEST_PASSWORD)
+    monkeypatch.delenv("PEOPLE_AUTH_DISABLED", raising=False)
     with TestClient(app) as c:
+        c.auth = ("user", TEST_PASSWORD)  # exercise real auth in every test
         yield c
 
 

@@ -18,6 +18,13 @@ if [ ! -d .venv ]; then
   .venv/bin/pip install -r requirements.txt
 fi
 
+# Serving beyond loopback: a password is mandatory (the app holds PII).
+if [ -z "${PEOPLE_PASSWORD:-}" ]; then
+  echo "ERROR: set PEOPLE_PASSWORD before serving on the network:" >&2
+  echo "  PEOPLE_PASSWORD='…' scripts/serve-lan.sh" >&2
+  exit 1
+fi
+
 IP="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo 0.0.0.0)"
 echo "Serving on http://${IP}:${PORT}  (open this from your phone on the same Wi-Fi)"
 echo "NOTE: run from a normal terminal — a sandboxed Claude session blocks LAN access."

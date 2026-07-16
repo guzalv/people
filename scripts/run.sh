@@ -14,5 +14,11 @@ if [ ! -d .venv ]; then
   .venv/bin/pip install -r requirements.txt
 fi
 
+# Loopback-only dev server: skip auth unless a password is explicitly set.
+if [ -z "${PEOPLE_PASSWORD:-}" ]; then
+  export PEOPLE_AUTH_DISABLED=1
+  echo "Auth disabled (loopback dev). Set PEOPLE_PASSWORD to test with auth."
+fi
+
 echo "Serving on http://127.0.0.1:${PORT}"
 exec .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port "$PORT"

@@ -1,7 +1,20 @@
 # People
 
 Personal app to remember what acquaintances like, can't eat, and what's going
-on in their lives. Single-user, local, no auth.
+on in their lives. Single-user, protected by one password.
+
+## Auth
+
+Everything (UI and API) sits behind HTTP Basic auth: any username, the
+password from the `PEOPLE_PASSWORD` env var. Without it the server answers
+503 to everything (fail closed); `PEOPLE_AUTH_DISABLED=1` turns auth off for
+loopback dev (what `scripts/run.sh` and the test scripts do).
+
+**Before exposing to the internet:** Basic auth sends the password with every
+request, so it is only safe over HTTPS. Put the app behind something that
+terminates TLS — a Cloudflare Tunnel, or caddy/nginx with a certificate —
+and use a long random password (`openssl rand -base64 24`). Never
+port-forward plain HTTP from the router.
 
 ## Run
 
@@ -22,6 +35,7 @@ For a deployment that doesn't need the `.venv` around — and that serves the LA
 (so a phone can reach it) from a normal terminal:
 
 ```bash
+echo "PEOPLE_PASSWORD=$(openssl rand -base64 24)" > .env   # once; compose reads it
 docker compose up -d --build
 # open http://localhost:8080  (and http://<this-machine-ip>:8080 from a phone)
 ```

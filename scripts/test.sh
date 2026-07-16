@@ -22,7 +22,7 @@ if command -v node >/dev/null 2>&1 && [ -d tools/node_modules ]; then
   DB="/private/tmp/people-uitest-$$.db"
   rm -f "$DB" "$DB-wal" "$DB-shm"
 
-  PEOPLE_DB="$DB" .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port "$PORT" \
+  PEOPLE_DB="$DB" PEOPLE_AUTH_DISABLED=1 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port "$PORT" \
     >/private/tmp/people-uitest-$$.log 2>&1 &
   SRV=$!
   # kill may fail inside a sandbox — tolerate it.
@@ -43,7 +43,7 @@ if command -v node >/dev/null 2>&1 && [ -d tools/node_modules ]; then
     # created at startup).
     kill "$SRV" 2>/dev/null || true
     rm -f "$DB" "$DB-wal" "$DB-shm"
-    PEOPLE_DB="$DB" .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port "$PORT" \
+    PEOPLE_DB="$DB" PEOPLE_AUTH_DISABLED=1 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port "$PORT" \
       >>/private/tmp/people-uitest-$$.log 2>&1 &
     SRV=$!
     for _ in $(seq 1 50); do
