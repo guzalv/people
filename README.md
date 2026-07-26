@@ -44,6 +44,13 @@ The SQLite file stays a plain file on the host at `./data/people.db` (compose
 bind-mounts `./data` to `/data` in the container), so `scripts/backup.sh` and
 plain copies still work. `restart: unless-stopped` keeps it up across reboots.
 
+`docker-compose.yml` also works standalone on a host that runs several
+services under one docker-compose setup: the published port defaults to 8080
+but is overridable (`PEOPLE_PORT=8123` in `.env`) to avoid clashing with
+neighbors, and the file has a commented block showing how to attach to a
+shared reverse-proxy network (traefik-style labels) instead of publishing a
+host port directly.
+
 ## Concepts
 
 - **People** and **families**: a family groups people (many-to-many); families
