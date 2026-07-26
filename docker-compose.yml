@@ -1,6 +1,7 @@
 services:
   people:
-    build: .
+    image: ghcr.io/guzalv/people:latest
+    pull_policy: always
     container_name: people
     ports:
       # Host port configurable so it doesn't collide with other services on a

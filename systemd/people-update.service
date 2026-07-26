@@ -1,0 +1,7 @@
+[Unit]
+Description=Pull latest people image and recreate if changed
+
+[Service]
+Type=oneshot
+WorkingDirectory=/path/to/sw/people
+ExecStart=/path/to/sw/people/scripts/deploy-latest.sh

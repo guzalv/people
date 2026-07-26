@@ -31,18 +31,23 @@ Data lives in `data/people.db` (SQLite). Back up with `scripts/backup.sh`
 
 ## Docker
 
-For a deployment that doesn't need the `.venv` around — and that serves the LAN
-(so a phone can reach it) from a normal terminal:
+Every push to `main` builds the image and publishes it to
+`ghcr.io/guzalv/people:latest` (see `.github/workflows/docker-publish.yml`) —
+deployment just pulls it, no build step or checkout needed on the host:
 
 ```bash
 echo "PEOPLE_PASSWORD=$(openssl rand -base64 24)" > .env   # once; compose reads it
-docker compose up -d --build
+docker compose up -d
 # open http://localhost:8080  (and http://<this-machine-ip>:8080 from a phone)
 ```
 
-The SQLite file stays a plain file on the host at `./data/people.db` (compose
-bind-mounts `./data` to `/data` in the container), so `scripts/backup.sh` and
-plain copies still work. `restart: unless-stopped` keeps it up across reboots.
+The first pull needs the GHCR package set to public (or `docker login ghcr.io`
+on the host) — see the package settings on GitHub after the first workflow
+run. The SQLite file stays a plain file on the host at `./data/people.db`
+(compose bind-mounts `./data` to `/data` in the container), so
+`scripts/backup.sh` and plain copies still work. `restart: unless-stopped`
+keeps it up across reboots; `pull_policy: always` means a plain
+`docker compose up -d` re-pulls and recreates whenever `latest` has moved.
 
 `docker-compose.yml` also works standalone on a host that runs several
 services under one docker-compose setup: the published port defaults to 8080
@@ -50,6 +55,29 @@ but is overridable (`PEOPLE_PORT=8123` in `.env`) to avoid clashing with
 neighbors, and the file has a commented block showing how to attach to a
 shared reverse-proxy network (traefik-style labels) instead of publishing a
 host port directly.
+
+To rebuild locally instead of pulling (e.g. testing an unpushed change),
+swap the `image:`/`pull_policy:` lines for `build: .`.
+
+### Auto-updating on the deploy host
+
+To pick up new pushes to `main` without logging in by hand, install the
+`systemd/` unit + `scripts/deploy-latest.sh` pair on the deploy host — a
+timer that runs `docker compose pull && docker compose up -d
+--remove-orphans` every 15 minutes. `up -d` only recreates the container when
+the pulled digest actually changed, so idle runs are a fast no-op; no extra
+container, no `docker.sock` handed to anything, no CI credentials on the
+host (rejected watchtower and a CI→SSH deploy for exactly those reasons — see
+`~/ai/current-work/people-tracker.md` for the comparison).
+
+```bash
+sudo cp systemd/people-update.* /etc/systemd/system/
+sudo sed -i "s#/path/to/sw/people#$(pwd)#" /etc/systemd/system/people-update.service
+sudo systemctl enable --now people-update.timer
+```
+
+The GHCR package must be public (or the host needs `docker login ghcr.io`)
+for the pull to work unattended.
 
 ## Concepts
 
