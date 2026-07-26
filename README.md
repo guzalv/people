@@ -49,6 +49,12 @@ run. The SQLite file stays a plain file on the host at `./data/people.db`
 keeps it up across reboots; `pull_policy: always` means a plain
 `docker compose up -d` re-pulls and recreates whenever `latest` has moved.
 
+The container fixes ownership of the bind-mounted `./data` on every start
+(root briefly, via `docker-entrypoint.sh`, then drops to the non-root
+`appuser` to actually run the server) — you don't need to `chown` it
+yourself. One side effect of that pattern: `docker exec people sh` opens as
+root by default; add `-u appuser` if you want a non-root debug shell.
+
 `docker-compose.yml` also works standalone on a host that runs several
 services under one docker-compose setup: the published port defaults to 8080
 but is overridable (`PEOPLE_PORT=8123` in `.env`) to avoid clashing with
