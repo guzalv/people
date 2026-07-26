@@ -55,12 +55,20 @@ The container fixes ownership of the bind-mounted `./data` on every start
 yourself. One side effect of that pattern: `docker exec people sh` opens as
 root by default; add `-u appuser` if you want a non-root debug shell.
 
-`docker-compose.yml` also works standalone on a host that runs several
-services under one docker-compose setup: the published port defaults to 8080
-but is overridable (`PEOPLE_PORT=8123` in `.env`) to avoid clashing with
-neighbors, and the file has a commented block showing how to attach to a
-shared reverse-proxy network (traefik-style labels) instead of publishing a
-host port directly.
+`docker-compose.yml` is set up for a host that runs several services behind
+a shared reverse proxy: no `ports:` mapping, just an explicit `networks:`
+attach to the proxy's network (`proxy_default` below — Compose names a
+project's default network `<project>_default`, so match whatever your proxy
+stack is actually called) so the proxy can reach the container by service
+name. A service only joins a network it explicitly lists — declaring
+`networks:` at the top level alone does *not* attach anything to it, a
+common gotcha. In your proxy config, `proxy_pass` (nginx) / the router
+service port (traefik) etc. targets `http://people:8080` — the container's
+internal port, not any host-published one.
+
+To expose a host port instead (no reverse proxy), drop the `networks:`
+block and add back `ports: ["${PEOPLE_PORT:-8080}:8080"]` — override
+`PEOPLE_PORT` in `.env` if 8080 is already taken by a neighbor.
 
 To rebuild locally instead of pulling (e.g. testing an unpushed change),
 swap the `image:`/`pull_policy:` lines for `build: .`.

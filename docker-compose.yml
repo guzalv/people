@@ -3,10 +3,9 @@ services:
     image: ghcr.io/guzalv/people:latest
     pull_policy: always
     container_name: people
-    ports:
-      # Host port configurable so it doesn't collide with other services on a
-      # shared box; defaults to 8080. Override via .env: PEOPLE_PORT=8123
-      - "${PEOPLE_PORT:-8080}:8080"
+    # No `ports:` — reached only through the reverse proxy on the shared
+    # network below. Add a `ports: ["${PEOPLE_PORT:-8080}:8080"]` entry
+    # instead if you want to hit this container directly from the host.
     environment:
       # Required: the app refuses requests (503) without it. Put it in .env
       # (gitignored) next to this file.
@@ -16,18 +15,9 @@ services:
       # to back up (scripts/backup.sh) — the container writes /data/people.db.
       - ./data:/data
     restart: unless-stopped
+    networks:
+      - proxy_default
 
-    # If this host fronts services with a reverse proxy (traefik, nginx-proxy,
-    # caddy-docker-proxy), drop the `ports:` mapping above and instead attach
-    # this service to that proxy's shared network + add its labels, e.g.:
-    #
-    # networks:
-    #   - proxy
-    # labels:
-    #   - "traefik.enable=true"
-    #   - "traefik.http.routers.people.rule=Host(`people.example.com`)"
-    #   - "traefik.http.services.people.loadbalancer.server.port=8080"
-    #
-    # networks:
-    #   proxy:
-    #     external: true
+networks:
+  proxy_default:
+    external: true
